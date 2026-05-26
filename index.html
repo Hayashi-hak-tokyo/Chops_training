@@ -47,12 +47,21 @@
             </select>
           </div>
 
-          <div class="mb-6">
+          <div class="mb-5">
             <label class="flex justify-between text-sm font-semibold text-slate-600 mb-2">
               <span>Tempo (BPM)</span>
               <span id="bpmDisplay" class="text-blue-600 font-bold">100</span>
             </label>
             <input id="bpmInput" type="range" min="60" max="240" value="100" class="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600">
+          </div>
+
+          <!-- Metronome Toggle -->
+          <div class="mb-6 flex justify-between items-center bg-white p-3 rounded-lg border border-slate-200 shadow-sm">
+            <span class="text-sm font-semibold text-slate-700">Metronome Click</span>
+            <label class="relative inline-flex items-center cursor-pointer">
+              <input type="checkbox" id="metronomeToggle" class="sr-only peer">
+              <div class="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+            </label>
           </div>
 
           <button id="generateBtn" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-lg shadow-md transition duration-200">
@@ -85,7 +94,9 @@
     let bpm = 100;
     let strokes = [];
     let isPlaying = false;
+    let isMetronomeOn = false; // メトロノームの状態
     let sequence = null;
+    let metroSeq = null; // メトロノーム用のシーケンス
     let synths = null;
 
     // --- DOM Elements ---
@@ -94,6 +105,7 @@
     const bpmDisplay = document.getElementById('bpmDisplay');
     const generateBtn = document.getElementById('generateBtn');
     const playBtn = document.getElementById('playBtn');
+    const metronomeToggle = document.getElementById('metronomeToggle');
     const scoreContainer = document.getElementById('scoreContainer');
 
     // --- Audio Initialization ---
@@ -125,7 +137,15 @@
         harmonicity: 5.1, modulationIndex: 32, resonance: 4000, octaves: 1.5
       }).toDestination();
 
-      synths = { kick, snare, tom, floor, crash };
+      // メトロノーム用（ウッドブロック風のデジタルクリック音）
+      const click = new Tone.MembraneSynth({
+        pitchDecay: 0.01,
+        octaves: 1,
+        oscillator: { type: "square" },
+        envelope: { attack: 0.001, decay: 0.05, sustain: 0, release: 0.01 }
+      }).toDestination();
+
+      synths = { kick, snare, tom, floor, crash, click };
     }
 
     // --- Chops Generation Logic ---
@@ -209,16 +229,15 @@
         const notes = strokes.map(stroke => {
           let key = "c/5";
           
-          // ドラム譜として正しい位置と符頭に設定
-          if (stroke.inst === "C") key = "g/5/x2"; // クラッシュは一番上の線の上部で×印
+          if (stroke.inst === "C") key = "g/5/x2"; // クラッシュ
           else if (stroke.inst === "T") key = "e/5"; // タム
           else if (stroke.inst === "S") key = "c/5"; // スネア
           else if (stroke.inst === "F") key = "a/4"; // フロアタム
-          else if (stroke.inst === "K") key = "f/4"; // キックは一番下のスペース
+          else if (stroke.inst === "K") key = "f/4"; // キック
 
           const note = new VF.StaveNote({ clef: "percussion", keys: [key], duration: "16" });
 
-          // 下部に運指テキスト (R, L, K) を追加（上部の楽器名は綺麗にするため削除）
+          // 下部に運指テキスト
           note.addModifier(0, new VF.Annotation(stroke.hand)
               .setVerticalJustification(VF.Annotation.VerticalJustify.BOTTOM)
               .setFont("sans-serif", 13, "bold"));
@@ -232,7 +251,6 @@
         for (let i = 0; i < 4; i++) {
           const beatNotes = notes.slice(i * 6, i * 6 + 6);
           beams.push(new VF.Beam(beatNotes));
-          // VexFlowの仕様に則り、16分音符4つ分のスペースに6つを配置する指定（計算用）
           tuplets.push(new VF.Tuplet(beatNotes, { num_notes: 6, notes_occupied: 4 }));
         }
 
@@ -243,7 +261,6 @@
         
         voice.draw(context, stave);
         beams.forEach(b => b.setContext(context).draw());
-        // 「6:4」の文字を非表示にするため、tuplets の描画(draw)処理を削除しました
 
       } catch (error) {
         console.error("VexFlow描画エラー:", error);
@@ -258,7 +275,9 @@
     // --- Audio Playback ---
     function startPlayback() {
       if (sequence) sequence.dispose();
+      if (metroSeq) metroSeq.dispose();
 
+      // フレーズ用のシーケンス
       sequence = new Tone.Sequence((time, stroke) => {
         if (!stroke) return;
         switch (stroke.inst) {
@@ -284,13 +303,26 @@
         }
       }, strokes, "24n");
 
+      // メトロノーム用のシーケンス（4分音符ごとに鳴らす）
+      metroSeq = new Tone.Sequence((time, beat) => {
+        if (isMetronomeOn) {
+          if (beat === 0) {
+            synths.click.triggerAttackRelease("G5", "32n", time, 1); // 1拍目は高め・強め
+          } else {
+            synths.click.triggerAttackRelease("C5", "32n", time, 0.7); // 2, 3, 4拍目
+          }
+        }
+      }, [0, 1, 2, 3], "4n");
+
       Tone.Transport.bpm.value = bpm;
       sequence.start(0);
+      metroSeq.start(0);
       Tone.Transport.start();
     }
 
     function stopPlayback() {
       if (sequence) sequence.stop();
+      if (metroSeq) metroSeq.stop();
       Tone.Transport.stop();
     }
 
@@ -316,6 +348,10 @@
       Tone.Transport.bpm.value = bpm;
     });
 
+    metronomeToggle.addEventListener('change', (e) => {
+      isMetronomeOn = e.target.checked;
+    });
+
     generateBtn.addEventListener('click', () => {
       generateNewChops();
     });
@@ -334,7 +370,7 @@
     function checkLibsAndGenerate() {
       if (!window.Vex || !window.Vex.Flow) {
         loadCheckCount++;
-        if (loadCheckCount > 50) { // 約5秒待機
+        if (loadCheckCount > 50) {
           scoreContainer.innerHTML = `
             <div class='text-red-500 font-bold p-4 bg-red-50 rounded text-left'>
               ⚠️ 楽譜ライブラリ(VexFlow)の読み込みに失敗しました。<br>
