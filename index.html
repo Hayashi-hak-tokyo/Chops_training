@@ -152,13 +152,16 @@
     function generateNewChops() {
       const newStrokes = [];
       
+      // 【修正】1小節全体でリードの手（右手スタートか左手スタートか）を統一します。
+      // これにより、拍の繋ぎ目やループの戻り部分で同じ手が3連打(RRRやLLL)になるのを完全に防ぎます。
+      const isRightLead = Math.random() < 0.5;
+      
       for (let i = 0; i < 4; i++) {
         let currentMode = mode;
         if (mode === "Random") {
           currentMode = Math.random() < 0.5 ? "Paradiddle-diddle" : "Six stroke";
         }
 
-        const isRightLead = Math.random() < 0.5;
         let baseHand, isDouble;
 
         if (currentMode === "Paradiddle-diddle") {
