@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chops Generator</title>
+  
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- VexFlow (楽譜描画用) - ネットワークブロックを回避するため最も安定した v3.0.9 を使用 -->
+  <script src="https://unpkg.com/vexflow@3.0.9/releases/vexflow-min.js"></script>
+  
+  <!-- Tone.js (音源用) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
+  
+  <style>
+    /* SVGの描画が見切れないようにする */
+    #scoreContainer svg {
+      overflow: visible;
+      display: block;
+      margin: 0 auto;
+    }
+  </style>
+</head>
+<body class="min-h-screen bg-neutral-100 p-4 md:p-8 font-sans">
+
+  <div class="max-w-5xl mx-auto bg-white rounded-2xl shadow-xl overflow-hidden">
+    <!-- Header -->
+    <div class="bg-slate-800 text-white py-6 px-8">
+      <h1 class="text-3xl font-extrabold tracking-tight">Chops Generator</h1>
+      <p class="text-slate-300 mt-1">Paradiddle-diddle & Six Stroke Roll Orchestrator</p>
+    </div>
+    
+    <div class="p-8">
+      <!-- Controls -->
+      <div class="flex flex-col md:flex-row gap-8 mb-8">
+        <div class="flex-1 bg-slate-50 p-6 rounded-xl border border-slate-200">
+          <h2 class="text-lg font-bold mb-4 text-slate-700">Settings</h2>
+          
+          <div class="mb-5">
+            <label class="block text-sm font-semibold text-slate-600 mb-2">Rudiment Mode</label>
+            <select id="modeSelect" class="w-full p-3 bg-white border border-slate-300 rounded-lg shadow-sm focus:ring-2 focus:ring-blue-500 focus:outline-none transition">
+              <option value="Random">Random Mix</option>
+              <option value="Paradiddle-diddle">Paradiddle-diddle Only</option>
+              <option value="Six stroke">Six Stroke Roll Only</option>
+            </select>
+          </div>
+
+          <div class="mb-6">
+            <label class="flex justify-between text-sm font-semibold text-slate-600 mb-2">
+              <span>Tempo (BPM)</span>
+              <span id="bpmDisplay" class="text-blue-600 font-bold">100</span>
+            </label>
+            <input id="bpmInput" type="range" min="60" max="240" value="100" class="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600">
+          </div>
+
+          <button id="generateBtn" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-lg shadow-md transition duration-200">
+            Generate New Chops
+          </button>
+        </div>
+
+        <div class="flex-1 flex flex-col items-center justify-center bg-slate-50 p-6 rounded-xl border border-slate-200">
+          <button id="playBtn" class="w-36 h-36 rounded-full flex items-center justify-center text-2xl font-black text-white shadow-xl transform transition duration-300 hover:scale-105 active:scale-95 bg-emerald-500 hover:bg-emerald-600 shadow-emerald-500/30">
+            PLAY
+          </button>
+        </div>
+      </div>
+
+      <!-- Score Area -->
+      <div class="mb-4">
+        <h2 class="text-lg font-bold mb-3 text-slate-700">Notation</h2>
+        <div class="overflow-x-auto bg-white border-2 border-slate-100 rounded-xl p-6 shadow-inner text-center">
+          <div id="scoreContainer" class="w-full max-w-[850px] mx-auto min-h-[200px]">
+            <p class="text-slate-500 pt-8 animate-pulse">Loading engine...</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // --- Application State ---
+    let mode = "Random";
+    let bpm = 100;
+    let strokes = [];
+    let isPlaying = false;
+    let sequence = null;
+    let synths = null;
+
+    // --- DOM Elements ---
+    const modeSelect = document.getElementById('modeSelect');
+    const bpmInput = document.getElementById('bpmInput');
+    const bpmDisplay = document.getElementById('bpmDisplay');
+    const generateBtn = document.getElementById('generateBtn');
+    const playBtn = document.getElementById('playBtn');
+    const scoreContainer = document.getElementById('scoreContainer');
+
+    // --- Audio Initialization ---
+    function initSynths() {
+      if (synths) return;
+
+      const kick = new Tone.MembraneSynth({
+        pitchDecay: 0.05, octaves: 4, oscillator: { type: "sine" },
+        envelope: { attack: 0.001, decay: 0.4, sustain: 0.01, release: 1.4 }
+      }).toDestination();
+      
+      const snare = new Tone.NoiseSynth({
+        noise: { type: "white" },
+        envelope: { attack: 0.005, decay: 0.2, sustain: 0, release: 0.2 }
+      }).toDestination();
+      
+      const tom = new Tone.MembraneSynth({
+        pitchDecay: 0.05, octaves: 4, oscillator: { type: "sine" },
+        envelope: { attack: 0.001, decay: 0.4, sustain: 0.01, release: 1.4 }
+      }).toDestination();
+      
+      const floor = new Tone.MembraneSynth({
+        pitchDecay: 0.05, octaves: 4, oscillator: { type: "sine" },
+        envelope: { attack: 0.001, decay: 0.5, sustain: 0.01, release: 1.4 }
+      }).toDestination();
+      
+      const crash = new Tone.MetalSynth({
+        frequency: 200, envelope: { attack: 0.001, decay: 1.4, release: 0.2 },
+        harmonicity: 5.1, modulationIndex: 32, resonance: 4000, octaves: 1.5
+      }).toDestination();
+
+      synths = { kick, snare, tom, floor, crash };
+    }
+
+    // --- Chops Generation Logic ---
+    function generateNewChops() {
+      const newStrokes = [];
+      
+      for (let i = 0; i < 4; i++) {
+        let currentMode = mode;
+        if (mode === "Random") {
+          currentMode = Math.random() < 0.5 ? "Paradiddle-diddle" : "Six stroke";
+        }
+
+        const isRightLead = Math.random() < 0.5;
+        let baseHand, isDouble;
+
+        if (currentMode === "Paradiddle-diddle") {
+          baseHand = isRightLead ? ["R", "L", "R", "R", "L", "L"] : ["L", "R", "L", "L", "R", "R"];
+          isDouble = [false, false, true, true, true, true];
+        } else {
+          baseHand = isRightLead ? ["R", "L", "L", "R", "R", "L"] : ["L", "R", "R", "L", "L", "R"];
+          isDouble = [false, true, true, true, true, false];
+        }
+
+        const singleInsts = ["C", "T", "S", "F", "K"];
+        const doubleInsts = ["T", "S", "F"];
+        
+        let insts = Array(6).fill("");
+        
+        if (currentMode === "Paradiddle-diddle") {
+          insts[0] = singleInsts[Math.floor(Math.random() * singleInsts.length)];
+          insts[1] = singleInsts[Math.floor(Math.random() * singleInsts.length)];
+          
+          const d1 = doubleInsts[Math.floor(Math.random() * doubleInsts.length)];
+          insts[2] = d1; insts[3] = d1; 
+          
+          const d2 = doubleInsts[Math.floor(Math.random() * doubleInsts.length)];
+          insts[4] = d2; insts[5] = d2; 
+        } else {
+          insts[0] = singleInsts[Math.floor(Math.random() * singleInsts.length)];
+          insts[5] = singleInsts[Math.floor(Math.random() * singleInsts.length)];
+          
+          const d1 = doubleInsts[Math.floor(Math.random() * doubleInsts.length)];
+          insts[1] = d1; insts[2] = d1;
+          
+          const d2 = doubleInsts[Math.floor(Math.random() * doubleInsts.length)];
+          insts[3] = d2; insts[4] = d2;
+        }
+
+        for (let j = 0; j < 6; j++) {
+          let hand = baseHand[j];
+          if (insts[j] === "K") hand = "K";
+          newStrokes.push({ hand, inst: insts[j], isDouble: isDouble[j] });
+        }
+      }
+      
+      strokes = newStrokes;
+      drawScore();
+
+      if (isPlaying) {
+        stopPlayback();
+        startPlayback();
+      }
+    }
+
+    // --- Score Rendering (VexFlow) ---
+    function drawScore() {
+      if (!window.Vex || !window.Vex.Flow) return;
+      
+      const VF = window.Vex.Flow;
+      scoreContainer.innerHTML = "";
+
+      try {
+        const renderer = new VF.Renderer(scoreContainer, VF.Renderer.Backends.SVG);
+        renderer.resize(850, 200);
+        const context = renderer.getContext();
+        
+        const stave = new VF.Stave(10, 40, 830);
+        stave.addClef("percussion").addTimeSignature("4/4");
+        stave.setContext(context).draw();
+
+        const notes = strokes.map(stroke => {
+          let key = "c/5";
+          
+          // ドラム譜として正しい位置と符頭に設定
+          if (stroke.inst === "C") key = "g/5/x2"; // クラッシュは一番上の線の上部で×印
+          else if (stroke.inst === "T") key = "e/5"; // タム
+          else if (stroke.inst === "S") key = "c/5"; // スネア
+          else if (stroke.inst === "F") key = "a/4"; // フロアタム
+          else if (stroke.inst === "K") key = "f/4"; // キックは一番下のスペース
+
+          const note = new VF.StaveNote({ clef: "percussion", keys: [key], duration: "16" });
+
+          // 下部に運指テキスト (R, L, K) を追加（上部の楽器名は綺麗にするため削除）
+          note.addModifier(0, new VF.Annotation(stroke.hand)
+              .setVerticalJustification(VF.Annotation.VerticalJustify.BOTTOM)
+              .setFont("sans-serif", 13, "bold"));
+          
+          return note;
+        });
+
+        const beams = [];
+        const tuplets = [];
+        
+        for (let i = 0; i < 4; i++) {
+          const beatNotes = notes.slice(i * 6, i * 6 + 6);
+          beams.push(new VF.Beam(beatNotes));
+          // VexFlowの仕様に則り、16分音符4つ分のスペースに6つを配置する指定（計算用）
+          tuplets.push(new VF.Tuplet(beatNotes, { num_notes: 6, notes_occupied: 4 }));
+        }
+
+        const voice = new VF.Voice({ num_beats: 4, beat_value: 4 }).setStrict(false);
+        voice.addTickables(notes);
+
+        new VF.Formatter().joinVoices([voice]).format([voice], 750);
+        
+        voice.draw(context, stave);
+        beams.forEach(b => b.setContext(context).draw());
+        // 「6:4」の文字を非表示にするため、tuplets の描画(draw)処理を削除しました
+
+      } catch (error) {
+        console.error("VexFlow描画エラー:", error);
+        scoreContainer.innerHTML = `
+          <div class="text-red-600 font-bold p-4 bg-red-50 rounded-lg w-full text-left">
+            ⚠️ 楽譜の描画処理でエラーが発生しました<br>
+            <span class="text-sm font-normal">${error.message}</span>
+          </div>`;
+      }
+    }
+
+    // --- Audio Playback ---
+    function startPlayback() {
+      if (sequence) sequence.dispose();
+
+      sequence = new Tone.Sequence((time, stroke) => {
+        if (!stroke) return;
+        switch (stroke.inst) {
+          case "K":
+            synths.kick.triggerAttackRelease("C1", "8n", time);
+            break;
+          case "S":
+            synths.snare.volume.value = stroke.isDouble ? -12 : 0;
+            synths.snare.triggerAttackRelease("16n", time);
+            break;
+          case "T":
+            synths.tom.volume.value = stroke.isDouble ? -6 : 0;
+            synths.tom.triggerAttackRelease("G2", "8n", time);
+            break;
+          case "F":
+            synths.floor.volume.value = stroke.isDouble ? -6 : 0;
+            synths.floor.triggerAttackRelease("C2", "8n", time);
+            break;
+          case "C":
+            synths.crash.volume.value = -5;
+            synths.crash.triggerAttackRelease("8n", time);
+            break;
+        }
+      }, strokes, "24n");
+
+      Tone.Transport.bpm.value = bpm;
+      sequence.start(0);
+      Tone.Transport.start();
+    }
+
+    function stopPlayback() {
+      if (sequence) sequence.stop();
+      Tone.Transport.stop();
+    }
+
+    function updatePlayButtonUI() {
+      if (isPlaying) {
+        playBtn.textContent = "STOP";
+        playBtn.className = "w-36 h-36 rounded-full flex items-center justify-center text-2xl font-black text-white shadow-xl transform transition duration-300 hover:scale-105 active:scale-95 bg-rose-500 hover:bg-rose-600 shadow-rose-500/30";
+      } else {
+        playBtn.textContent = "PLAY";
+        playBtn.className = "w-36 h-36 rounded-full flex items-center justify-center text-2xl font-black text-white shadow-xl transform transition duration-300 hover:scale-105 active:scale-95 bg-emerald-500 hover:bg-emerald-600 shadow-emerald-500/30";
+      }
+    }
+
+    // --- Event Listeners ---
+    modeSelect.addEventListener('change', (e) => {
+      mode = e.target.value;
+      generateNewChops();
+    });
+
+    bpmInput.addEventListener('input', (e) => {
+      bpm = parseInt(e.target.value);
+      bpmDisplay.textContent = bpm;
+      Tone.Transport.bpm.value = bpm;
+    });
+
+    generateBtn.addEventListener('click', () => {
+      generateNewChops();
+    });
+
+    playBtn.addEventListener('click', async () => {
+      await Tone.start();
+      initSynths();
+      isPlaying = !isPlaying;
+      updatePlayButtonUI();
+      if (isPlaying) startPlayback();
+      else stopPlayback();
+    });
+
+    // --- Boot Logic ---
+    let loadCheckCount = 0;
+    function checkLibsAndGenerate() {
+      if (!window.Vex || !window.Vex.Flow) {
+        loadCheckCount++;
+        if (loadCheckCount > 50) { // 約5秒待機
+          scoreContainer.innerHTML = `
+            <div class='text-red-500 font-bold p-4 bg-red-50 rounded text-left'>
+              ⚠️ 楽譜ライブラリ(VexFlow)の読み込みに失敗しました。<br>
+              <span class='text-sm font-normal text-slate-700'>
+                ネットワーク環境をご確認の上、ページをリロードしてください。
+              </span>
+            </div>`;
+          return;
+        }
+        setTimeout(checkLibsAndGenerate, 100);
+        return;
+      }
+      generateNewChops();
+    }
+
+    window.addEventListener('load', () => {
+      checkLibsAndGenerate();
+    });
+  </script>
+</body>
+</html>
