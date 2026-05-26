@@ -32,7 +32,7 @@
       <p class="text-slate-300 mt-1">Paradiddle-diddle & Six Stroke Roll Orchestrator</p>
     </div>
     
-    <div class="p-8">
+    <div class="p-4 md:p-8">
       <!-- Controls -->
       <div class="flex flex-col md:flex-row gap-8 mb-8">
         <div class="flex-1 bg-slate-50 p-6 rounded-xl border border-slate-200">
@@ -78,10 +78,15 @@
 
       <!-- Score Area -->
       <div class="mb-4">
-        <h2 class="text-lg font-bold mb-3 text-slate-700">Notation</h2>
-        <div class="overflow-x-auto bg-white border-2 border-slate-100 rounded-xl p-6 shadow-inner text-center">
-          <div id="scoreContainer" class="w-full max-w-[850px] mx-auto min-h-[200px]">
-            <p class="text-slate-500 pt-8 animate-pulse">Loading engine...</p>
+        <!-- レスポンシブ対応のヘッダー：Scroll ヒントを削除 -->
+        <div class="flex justify-between items-end mb-3 px-1">
+          <h2 class="text-lg font-bold text-slate-700">Notation</h2>
+        </div>
+        
+        <!-- 横スクロール設定(overflow-x-auto)を削除し、コンテナ幅に合わせて自動縮小されるように変更 -->
+        <div class="bg-white border-2 border-slate-100 rounded-xl p-2 md:p-6 shadow-inner text-center">
+          <div id="scoreContainer" class="w-full mx-auto">
+            <p class="text-slate-500 pt-8 animate-pulse text-center">Loading engine...</p>
           </div>
         </div>
       </div>
@@ -152,7 +157,7 @@
     function generateNewChops() {
       const newStrokes = [];
       
-      // 【修正】1小節全体でリードの手（右手スタートか左手スタートか）を統一します。
+      // 1小節全体でリードの手（右手スタートか左手スタートか）を統一します。
       // これにより、拍の繋ぎ目やループの戻り部分で同じ手が3連打(RRRやLLL)になるのを完全に防ぎます。
       const isRightLead = Math.random() < 0.5;
       
@@ -216,18 +221,23 @@
     // --- Score Rendering (VexFlow) ---
     function drawScore() {
       if (!window.Vex || !window.Vex.Flow) return;
+      if (strokes.length === 0) return;
       
       const VF = window.Vex.Flow;
       scoreContainer.innerHTML = "";
 
       try {
-        const renderer = new VF.Renderer(scoreContainer, VF.Renderer.Backends.SVG);
-        renderer.resize(850, 200);
-        const context = renderer.getContext();
+        // コンテナの実際の幅を取得
+        const containerWidth = scoreContainer.clientWidth || 750;
+        // 画面幅が狭い(600px未満)場合は2段に改行する
+        const isMobile = containerWidth < 600;
         
-        const stave = new VF.Stave(10, 40, 830);
-        stave.addClef("percussion").addTimeSignature("4/4");
-        stave.setContext(context).draw();
+        const renderer = new VF.Renderer(scoreContainer, VF.Renderer.Backends.SVG);
+        
+        const width = containerWidth;
+        const height = isMobile ? 280 : 150; // 改行時は高さを広げる
+        renderer.resize(width, height);
+        const context = renderer.getContext();
 
         const notes = strokes.map(stroke => {
           let key = "c/5";
@@ -240,7 +250,6 @@
 
           const note = new VF.StaveNote({ clef: "percussion", keys: [key], duration: "16" });
 
-          // 下部に運指テキスト
           note.addModifier(0, new VF.Annotation(stroke.hand)
               .setVerticalJustification(VF.Annotation.VerticalJustify.BOTTOM)
               .setFont("sans-serif", 13, "bold"));
@@ -257,13 +266,51 @@
           tuplets.push(new VF.Tuplet(beatNotes, { num_notes: 6, notes_occupied: 4 }));
         }
 
-        const voice = new VF.Voice({ num_beats: 4, beat_value: 4 }).setStrict(false);
-        voice.addTickables(notes);
+        if (isMobile) {
+          // ==============================
+          // スマホ向け：2段（改行）表示
+          // ==============================
+          const stave1 = new VF.Stave(10, 10, width - 20);
+          stave1.addClef("percussion");
+          stave1.setContext(context).draw();
+          
+          const stave2 = new VF.Stave(10, 140, width - 20);
+          stave2.setContext(context).draw();
 
-        new VF.Formatter().joinVoices([voice]).format([voice], 750);
-        
-        voice.draw(context, stave);
-        beams.forEach(b => b.setContext(context).draw());
+          // 1〜2拍目
+          const voice1 = new VF.Voice({ num_beats: 2, beat_value: 4 }).setStrict(false);
+          voice1.addTickables(notes.slice(0, 12));
+          // 3〜4拍目
+          const voice2 = new VF.Voice({ num_beats: 2, beat_value: 4 }).setStrict(false);
+          voice2.addTickables(notes.slice(12, 24));
+
+          new VF.Formatter().joinVoices([voice1]).format([voice1], width - 60);
+          new VF.Formatter().joinVoices([voice2]).format([voice2], width - 60);
+          
+          voice1.draw(context, stave1);
+          voice2.draw(context, stave2);
+          
+          beams.slice(0, 2).forEach(b => b.setContext(context).draw());
+          beams.slice(2, 4).forEach(b => b.setContext(context).draw());
+          // 【修正】「6:4」の文字と括弧を消すため、tupletsの描画処理を削除しました
+
+        } else {
+          // ==============================
+          // PC向け：1段表示
+          // ==============================
+          const stave = new VF.Stave(10, 10, width - 20);
+          stave.addClef("percussion");
+          stave.setContext(context).draw();
+
+          const voice = new VF.Voice({ num_beats: 4, beat_value: 4 }).setStrict(false);
+          voice.addTickables(notes);
+
+          new VF.Formatter().joinVoices([voice]).format([voice], width - 70);
+          
+          voice.draw(context, stave);
+          beams.forEach(b => b.setContext(context).draw());
+          // 【修正】「6:4」の文字と括弧を消すため、tupletsの描画処理を削除しました
+        }
 
       } catch (error) {
         console.error("VexFlow描画エラー:", error);
@@ -391,6 +438,17 @@
 
     window.addEventListener('load', () => {
       checkLibsAndGenerate();
+    });
+
+    // ウィンドウのリサイズ時に楽譜を再描画して崩れを防ぐ
+    let resizeTimer;
+    window.addEventListener('resize', () => {
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => {
+        if (strokes.length > 0) {
+          drawScore();
+        }
+      }, 100);
     });
   </script>
 </body>
